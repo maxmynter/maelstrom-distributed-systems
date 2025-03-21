@@ -67,7 +67,7 @@ fn init_reply(request: &JSONBody, node: &mut Node) -> InitJSONResponseBody {
 }
 
 fn init_envelope(node: &Node, dest: &str, body: InitJSONResponseBody) -> Value {
-    json!({"src": node.node_id, dest: dest, "body": body})
+    json!({"src": node.node_id, "dest": dest, "body": body})
 }
 
 fn main() -> Result<()> {
@@ -79,6 +79,7 @@ fn main() -> Result<()> {
         let _ = stdin.read_line(&mut buffer).expect("Failed to read config");
 
         let config: InitializationMessage = serde_json::from_str(buffer.as_str())?;
+        eprintln!("Received: {:?}", config);
 
         if config.body.msg_type != "init" {
             eprintln!("First message received must initialize");
@@ -88,7 +89,9 @@ fn main() -> Result<()> {
             next_message_id: 0,
         };
         let response_body = init_reply(&config.body, &mut node);
-        let response = init_envelope(&node, &config.src, response_body);
+        let response = serde_json::to_string(&init_envelope(&node, &config.src, response_body))
+            .expect("Failed to serialise Message");
+        println!("{}", response);
 
         eprint!("Initialized Node: {:?}", &node);
         node
