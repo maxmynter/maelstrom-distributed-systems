@@ -17,12 +17,14 @@ impl Node {
 
 enum MessageType {
     InitOk,
+    EchoOk,
 }
 
 impl MessageType {
     fn as_str(&self) -> String {
         match self {
             MessageType::InitOk => String::from("init_ok"),
+            MessageType::EchoOk => String::from("echo_ok"),
         }
     }
 }
@@ -37,6 +39,13 @@ struct JSONBody {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+struct EchoBody {
+    #[serde(rename = "type")]
+    msg_type: String,
+    msg_id: u64,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 struct InitJSONResponseBody {
     #[serde(rename = "type")]
     msg_type: String,
@@ -45,17 +54,23 @@ struct InitJSONResponseBody {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+enum MessageBody {
+    InitJSONResponseBody(InitJSONResponseBody),
+    EchoResponseBody(EchoBody),
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 struct InitializationMessage {
     src: String,
     dest: String,
-    body: JSONBody,
+    body: MessageBody,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 struct Response {
     src: String,
     dest: String,
-    body: JSONBody,
+    body: MessageBody,
 }
 
 fn init_reply(request: &JSONBody, node: &mut Node) -> InitJSONResponseBody {
@@ -98,7 +113,12 @@ fn main() -> Result<()> {
     };
 
     loop {
-        continue;
+        let mut buffer = String::new();
+        let stdin = io::stdin();
+        let _ = stdin
+            .read_line(&mut buffer)
+            .expect("Failed to read message.");
+        let message: Echo = serde_json::from_str(buffer.as_str());
     }
     Ok(())
 }
