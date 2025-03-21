@@ -1,50 +1,24 @@
-# Build artifacts
-*.class
-*.jar
-target/
-build/
-node_modules/
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-*.so
-*.dll
-*.dylib
+# Rust specific
+/target/
+**/*.rs.bk
+*.pdb
+Cargo.lock
 
-# Maelstrom test results and logs
-store/
+# Maelstrom test results
+/store/
 
-# Editor and OS specific files
-.idea/
-.vscode/
+# Binary executables - ignores compiled binaries like your echo program
+*/*/echo
+*/*/*/echo
+**/*/echo
+
+# Editor files for tmux/nvim
 *.swp
 *.swo
+
+# System files
 .DS_Store
 Thumbs.db
 
-# Dependency management
-.mvn/
-.gradle/
-
-# Generated files
+# Logs
 *.log
-.lein-*
-.nrepl-port
-
-# Language specific
-# Rust
-Cargo.lock
-/target/
-
-# Go
-/go/bin/
-/go/pkg/
-
-# Clojure
-.cpcache/
-.lein-deps-sum
-.lein-repl-history
-.lein-plugins/
-.lein-failures
-.nrepl-port
