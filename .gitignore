@@ -22,3 +22,20 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Maelstrom files
+**/*.edn
+**/*.fressian
+**/*.jepsen
+**/*.png
+**/*.svg
+**/timeline.html
+
+# Large JAR files
+/lib/maelstrom.jar
+**/*.jar
+
+# Temporary files
+*~
+.*.swp
+.*.swo
