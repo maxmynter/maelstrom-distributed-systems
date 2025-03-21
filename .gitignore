@@ -1,0 +1,50 @@
+# Build artifacts
+*.class
+*.jar
+target/
+build/
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.so
+*.dll
+*.dylib
+
+# Maelstrom test results and logs
+store/
+
+# Editor and OS specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Dependency management
+.mvn/
+.gradle/
+
+# Generated files
+*.log
+.lein-*
+.nrepl-port
+
+# Language specific
+# Rust
+Cargo.lock
+/target/
+
+# Go
+/go/bin/
+/go/pkg/
+
+# Clojure
+.cpcache/
+.lein-deps-sum
+.lein-repl-history
+.lein-plugins/
+.lein-failures
+.nrepl-port
