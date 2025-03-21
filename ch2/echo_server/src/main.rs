@@ -31,7 +31,11 @@ fn main() -> Result<()> {
 
     let config: InitializationMessage = serde_json::from_str(buffer.as_str())?;
 
-    println!("Ran until here.");
+    eprintln!("Received: {:?}", config);
+    if config.body.msg_type == "init" {
+        eprintln!("Initialized Node: {}", config.body.node_id);
+    }
+
     loop {
         continue;
     }
