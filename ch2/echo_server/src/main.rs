@@ -1,3 +1,4 @@
+use serde::de::Error;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Result, Value};
 use std::io;
@@ -30,59 +31,31 @@ impl MessageType {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-struct JSONBody {
-    #[serde(rename = "type")]
-    msg_type: String,
-    msg_id: u64,
-    node_id: String,
-    node_ids: Vec<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct EchoBody {
-    #[serde(rename = "type")]
-    msg_type: String,
-    msg_id: u64,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct InitJSONResponseBody {
-    #[serde(rename = "type")]
-    msg_type: String,
-    msg_id: u64,
-    in_reply_to: Option<u64>,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
+#[serde(tag = "type")]
 enum MessageBody {
-    InitJSONResponseBody(InitJSONResponseBody),
-    EchoResponseBody(EchoBody),
+    #[serde(rename = "init")]
+    Init {
+        msg_id: u64,
+        node_id: String,
+        node_ids: Vec<String>,
+    },
+    #[serde(rename = "init_ok")]
+    InitOk { msg_id: u64, in_reply_to: u64 },
+    #[serde(rename = "echo")]
+    Echo { msg_id: u64, echo: String },
+    #[serde(rename = "echo_ok")]
+    EchoOk {
+        msg_id: u64,
+        echo: String,
+        in_reply_to: u64,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-struct InitializationMessage {
+struct Message {
     src: String,
     dest: String,
     body: MessageBody,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct Response {
-    src: String,
-    dest: String,
-    body: MessageBody,
-}
-
-fn init_reply(request: &JSONBody, node: &mut Node) -> InitJSONResponseBody {
-    InitJSONResponseBody {
-        msg_id: node.get_next_msg_id(),
-        in_reply_to: Some(request.msg_id),
-        msg_type: MessageType::InitOk.as_str(),
-    }
-}
-
-fn init_envelope(node: &Node, dest: &str, body: InitJSONResponseBody) -> Value {
-    json!({"src": node.node_id, "dest": dest, "body": body})
 }
 
 fn main() -> Result<()> {
@@ -93,19 +66,37 @@ fn main() -> Result<()> {
 
         let _ = stdin.read_line(&mut buffer).expect("Failed to read config");
 
-        let config: InitializationMessage = serde_json::from_str(buffer.as_str())?;
+        let config: Message = serde_json::from_str(buffer.as_str())?;
         eprintln!("Received: {:?}", config);
 
-        if config.body.msg_type != "init" {
-            eprintln!("First message received must initialize");
-        }
+        let (init_request_id, node_id, node_ids) = match &config.body {
+            MessageBody::Init {
+                msg_id,
+                node_id,
+                node_ids,
+            } => (msg_id, node_id, node_ids),
+
+            _ => {
+                return Err(serde_json::Error::custom(
+                    "First message received wasn't init",
+                ))
+            }
+        };
+
         let mut node = Node {
-            node_id: config.body.node_id.clone(),
+            node_id: node_id.clone(),
             next_message_id: 0,
         };
-        let response_body = init_reply(&config.body, &mut node);
-        let response = serde_json::to_string(&init_envelope(&node, &config.src, response_body))
-            .expect("Failed to serialise Message");
+        let response_body = MessageBody::InitOk {
+            msg_id: node.get_next_msg_id(),
+            in_reply_to: init_request_id.clone(),
+        };
+        let response = serde_json::to_string(&json!(Message {
+            src: node.node_id.clone(),
+            dest: config.src.clone(),
+            body: response_body,
+        }))
+        .expect("Failed to serialise InitOk response");
         println!("{}", response);
 
         eprint!("Initialized Node: {:?}", &node);
@@ -118,7 +109,25 @@ fn main() -> Result<()> {
         let _ = stdin
             .read_line(&mut buffer)
             .expect("Failed to read message.");
-        let message: Echo = serde_json::from_str(buffer.as_str());
+        let message: Message = serde_json::from_str(buffer.as_str())?;
+        match message.body {
+            MessageBody::Echo { msg_id, echo } => {
+                // Create and stdout the echo response
+                let response_body = MessageBody::EchoOk {
+                    msg_id: node.get_next_msg_id(),
+                    echo,
+                    in_reply_to: msg_id,
+                };
+                let response = serde_json::to_string(&json!(Message {
+                    src: node.node_id.clone(),
+                    dest: message.src.clone(),
+                    body: response_body
+                }))
+                .expect("Failed to serizalize Echo Response");
+                println!("{}", response);
+            }
+            _ => continue,
+        }
     }
     Ok(())
 }
