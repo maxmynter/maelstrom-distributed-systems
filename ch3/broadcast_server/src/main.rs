@@ -1,6 +1,7 @@
 use serde::de::Error;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Result};
+use serde_json::Result;
+use std::collections::HashMap;
 use std::io;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
@@ -12,6 +13,7 @@ type MsgId = u64;
 struct Node {
     node_id: NodeId,
     node_ids: Vec<NodeId>,
+    topology: Option<HashMap<NodeId, Vec<NodeId>>>,
     next_message_id: MsgId,
     stdout: Arc<Mutex<std::io::Stdout>>,
     stderr: Arc<Mutex<std::io::Stderr>>,
@@ -68,6 +70,13 @@ enum MessageBody {
         echo: String,
         in_reply_to: MsgId,
     },
+    #[serde(rename = "topology")]
+    Topology {
+        msg_id: MsgId,
+        topology: std::collections::HashMap<NodeId, Vec<NodeId>>,
+    },
+    #[serde(rename = "topology_ok")]
+    TopologyOk { msg_id: MsgId, in_reply_to: MsgId },
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -98,11 +107,12 @@ fn main() -> Result<()> {
             let mut node = Node {
                 node_id: node_id.to_string(),
                 node_ids: node_ids.clone(),
+                topology: None,
                 next_message_id: 0,
                 stdout: Arc::new(Mutex::new(io::stdout())),
                 stderr: Arc::new(Mutex::new(io::stderr())),
             };
-            let _ = node.log(&format!("Initialized Node: {:?}", &node_wrapper));
+            let _ = node.log(&format!("Initialized Node: {:?}", &node));
 
             let response_body = MessageBody::InitOk {
                 msg_id: node.get_next_msg_id(),
@@ -124,7 +134,18 @@ fn main() -> Result<()> {
                         };
                         let _ = node.send(&message.src, response_body);
                     }
-                    _ => continue,
+                    MessageBody::Topology { msg_id, topology } => {
+                        node.topology = Some(topology);
+                        let response_body = MessageBody::TopologyOk {
+                            msg_id: node.get_next_msg_id(),
+                            in_reply_to: msg_id,
+                        };
+                        let _ = node.send(&message.src, response_body);
+                    }
+                    _ => {
+                        let _ = node.log("Received message with no known handler");
+                        continue;
+                    }
                 }
             }
             None => {
