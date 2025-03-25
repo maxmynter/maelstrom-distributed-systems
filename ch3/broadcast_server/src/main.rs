@@ -116,31 +116,26 @@ enum MessageBody {
         node_ids: Vec<String>,
     },
     #[serde(rename = "init_ok")]
-    InitOk { msg_id: MsgId, in_reply_to: MsgId },
+    InitOk { in_reply_to: MsgId },
     #[serde(rename = "echo")]
     Echo { msg_id: MsgId, echo: String },
     #[serde(rename = "echo_ok")]
-    EchoOk {
-        msg_id: MsgId,
-        echo: String,
-        in_reply_to: MsgId,
-    },
+    EchoOk { echo: String, in_reply_to: MsgId },
     #[serde(rename = "topology")]
     Topology {
         msg_id: MsgId,
         topology: std::collections::HashMap<NodeId, Vec<NodeId>>,
     },
     #[serde(rename = "topology_ok")]
-    TopologyOk { msg_id: MsgId, in_reply_to: MsgId },
+    TopologyOk { in_reply_to: MsgId },
     #[serde(rename = "broadcast")]
     Broadcast { msg_id: MsgId, message: NodeMessage },
     #[serde(rename = "broadcast_ok")]
-    BroadcastOk { msg_id: MsgId, in_reply_to: MsgId },
+    BroadcastOk { in_reply_to: MsgId },
     #[serde(rename = "read")]
     Read { msg_id: MsgId },
     #[serde(rename = "read_ok")]
     ReadOk {
-        msg_id: MsgId,
         in_reply_to: MsgId,
         messages: Vec<NodeMessage>,
     },
@@ -183,7 +178,6 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             let _ = node.log(&format!("Initialized Node: {:?}", &node));
 
             let response_body = MessageBody::InitOk {
-                msg_id: node.get_next_msg_id(),
                 in_reply_to: *msg_id,
             };
             let _ = node.send(&message.src, response_body);
@@ -196,7 +190,6 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                     MessageBody::Echo { msg_id, echo } => {
                         // Create and stdout the echo response
                         let response_body = MessageBody::EchoOk {
-                            msg_id: node.get_next_msg_id(),
                             echo,
                             in_reply_to: msg_id,
                         };
@@ -205,7 +198,6 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                     MessageBody::Topology { msg_id, topology } => {
                         node.topology = Some(topology);
                         let response_body = MessageBody::TopologyOk {
-                            msg_id: node.get_next_msg_id(),
                             in_reply_to: msg_id,
                         };
                         let _ = node.send(&message.src, response_body);
@@ -219,29 +211,22 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                                 continue;
                             }
                             Ok(false) => {
-                        let _ = node.add_message(broadcast_message);
+                                let _ = node.add_message(broadcast_message);
 
-                        // Acknowledge Broadcast
-                        let response_body = MessageBody::BroadcastOk {
-                            msg_id: node.get_next_msg_id(),
-                            in_reply_to: msg_id,
-                        };
-                        let _ = node.send(&message.src, response_body);
-
-                        // Gossip message to neighbors
-                        if let Some(topology) = &mut node.topology {
-                            let neighbors = match topology.get(&node.node_id) {
-                                Some(neighbors) => neighbors.clone(),
-                                None => Vec::new(),
-                            };
-                            for tgt_node_id in neighbors {
-                                let response_body = MessageBody::Broadcast {
-                                    msg_id: node.get_next_msg_id(),
-                                    message: broadcast_message.clone(),
-                                };
-                                let _ = node.send(&tgt_node_id, response_body);
-                            }
-                        }
+                                // Gossip message to neighbors
+                                if let Some(topology) = &mut node.topology {
+                                    let neighbors = match topology.get(&node.node_id) {
+                                        Some(neighbors) => neighbors.clone(),
+                                        None => Vec::new(),
+                                    };
+                                    for tgt_node_id in neighbors {
+                                        let response_body = MessageBody::Broadcast {
+                                            msg_id: node.get_next_msg_id(),
+                                            message: broadcast_message.clone(),
+                                        };
+                                        let _ = node.send(&tgt_node_id, response_body);
+                                    }
+                                }
                             }
                             Err(e) => {
                                 return Err(format!(
@@ -266,7 +251,6 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                             .into());
                         };
                         let response_body = MessageBody::ReadOk {
-                            msg_id: node.get_next_msg_id(),
                             in_reply_to: msg_id,
                             messages,
                         };
