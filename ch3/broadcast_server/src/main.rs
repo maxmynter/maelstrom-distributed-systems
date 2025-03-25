@@ -57,9 +57,20 @@ impl Node {
         let messages = self
             .messages
             .lock()
-            .map_err(|e| format!("Failed to aqcuire lock on messages: {}", e))?;
+            .map_err(|e| format!("Failed to acquire lock on messages: {}", e))?;
         let messages_vec = messages.iter().cloned().collect();
         Ok(messages_vec)
+    }
+
+    fn messages_contain(
+        &mut self,
+        message: &NodeMessage,
+    ) -> std::result::Result<bool, Box<dyn std::error::Error>> {
+        let messages = self
+            .messages
+            .lock()
+            .map_err(|e| format!("Failed to lock messages for read: {}", e))?;
+        Ok(messages.contains(&message))
     }
 
     fn log(&mut self, text: &str) -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -142,7 +153,7 @@ struct Message {
     body: MessageBody,
 }
 
-fn main() -> Result<()> {
+fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     // Read the node config
     let mut node_wrapper: Option<Node> = None;
 
@@ -203,6 +214,11 @@ fn main() -> Result<()> {
                         msg_id,
                         message: broadcast_message,
                     } => {
+                        match node.messages_contain(&broadcast_message) {
+                            Ok(true) => {
+                                continue;
+                            }
+                            Ok(false) => {
                         let _ = node.add_message(broadcast_message);
 
                         // Acknowledge Broadcast
@@ -226,6 +242,20 @@ fn main() -> Result<()> {
                                 let _ = node.send(&tgt_node_id, response_body);
                             }
                         }
+                            }
+                            Err(e) => {
+                                return Err(format!(
+                                    "Error checking if node message contains broadcast message: {}",
+                                    e
+                                )
+                                .into());
+                            }
+                        }
+                        // Acknowledge Broadcast
+                        let response_body = MessageBody::BroadcastOk {
+                            in_reply_to: msg_id,
+                        };
+                        let _ = node.send(&message.src, response_body);
                     }
                     MessageBody::Read { msg_id } => {
                         let Ok(messages) = node.read_messages() else {
@@ -248,9 +278,7 @@ fn main() -> Result<()> {
                 }
             }
             None => {
-                return Err(serde_json::Error::custom(
-                    "Received non-init message before node initialization",
-                ))
+                return Err(format!("Received non-init message before node initialization",).into())
             }
         }
     }
