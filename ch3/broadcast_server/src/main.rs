@@ -35,6 +35,18 @@ impl Node {
             ))),
         }
     }
+
+    fn send(&mut self, dest: &NodeId, body: MessageBody) -> Result<()> {
+        let message = Message {
+            src: self.node_id.clone(),
+            dest: dest.to_string(),
+            body,
+        };
+        let jsonified = serde_json::to_string(&message).expect("Failed to serialise message");
+        println!("{}", jsonified);
+        let _ = self.log(&format!("Sent: {}", jsonified));
+        Ok(())
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -65,26 +77,6 @@ struct Message {
     body: MessageBody,
 }
 
-fn acknowledge_init_node(
-    node: &mut Node,
-    init_request_id: MsgId,
-    init_ok_tgt: NodeId,
-) -> Result<()> {
-    let response_body = MessageBody::InitOk {
-        msg_id: node.get_next_msg_id(),
-        in_reply_to: init_request_id,
-    };
-
-    let response = serde_json::to_string(&json!(Message {
-        src: node.node_id.clone(),
-        dest: init_ok_tgt,
-        body: response_body,
-    }))
-    .expect("Failed to serialise InitOk response");
-    println!("{}", response);
-    Ok(())
-}
-
 fn main() -> Result<()> {
     // Read the node config
     let mut node_wrapper: Option<Node> = None;
@@ -110,8 +102,13 @@ fn main() -> Result<()> {
                 stdout: Arc::new(Mutex::new(io::stdout())),
                 stderr: Arc::new(Mutex::new(io::stderr())),
             };
-            let _ = acknowledge_init_node(&mut node, *msg_id, message.src);
             let _ = node.log(&format!("Initialized Node: {:?}", &node_wrapper));
+
+            let response_body = MessageBody::InitOk {
+                msg_id: node.get_next_msg_id(),
+                in_reply_to: *msg_id,
+            };
+            let _ = node.send(&message.src, response_body);
             node_wrapper = Some(node);
             continue;
         };
@@ -125,14 +122,7 @@ fn main() -> Result<()> {
                             echo,
                             in_reply_to: msg_id,
                         };
-                        let response = serde_json::to_string(&json!(Message {
-                            src: node.node_id.clone(),
-                            dest: message.src.clone(),
-                            body: response_body
-                        }))
-                        .expect("Failed to serizalize Echo Response");
-                        println!("{}", response);
-                        let _ = node.log(&format!("Sent response: {}", response));
+                        let _ = node.send(&message.src, response_body);
                     }
                     _ => continue,
                 }
