@@ -28,7 +28,8 @@ impl Node {
     fn log(&mut self, message: &str) -> Result<()> {
         match self.stderr.lock() {
             Ok(mut err_out_guard) => {
-                writeln!(err_out_guard, "{}", message);
+                let _ = writeln!(err_out_guard, "{}", message)
+                    .map_err(|e| serde_json::Error::custom(e.to_string()));
                 Ok(())
             }
             Err(e) => Err(serde_json::Error::custom(format!(
@@ -45,7 +46,17 @@ impl Node {
             body,
         };
         let jsonified = serde_json::to_string(&message).expect("Failed to serialise message");
-        println!("{}", jsonified);
+        let _ = match self.stdout.lock() {
+            Ok(mut stdout_guard) => {
+                let _ = writeln!(stdout_guard, "{}", jsonified)
+                    .map_err(|e| serde_json::Error::custom(e.to_string()));
+                Ok(())
+            }
+            Err(e) => Err(serde_json::Error::custom(format!(
+                "Failed to acquire lock on stdout for sending: {}",
+                e
+            ))),
+        };
         let _ = self.log(&format!("Sent: {}", jsonified));
         Ok(())
     }
