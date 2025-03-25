@@ -65,33 +65,6 @@ struct Message {
     body: MessageBody,
 }
 
-fn parse_init_node() -> Result<(MsgId, NodeId, NodeId, Vec<NodeId>)> {
-    let mut buffer = String::new();
-    let stdin = io::stdin();
-
-    let _ = stdin.read_line(&mut buffer).expect("Failed to read config");
-
-    let config: Message = serde_json::from_str(buffer.as_str())?;
-    eprintln!("Received: {:?}", config);
-
-    let init_request_src = config.src;
-
-    let (init_request_id, node_id, node_ids) = match config.body {
-        MessageBody::Init {
-            msg_id,
-            node_id,
-            node_ids,
-        } => (msg_id, node_id, node_ids),
-
-        _ => {
-            return Err(serde_json::Error::custom(
-                "First message received wasn't init",
-            ))
-        }
-    };
-    Ok((init_request_id, init_request_src, node_id, node_ids))
-}
-
 fn acknowledge_init_node(
     node: &mut Node,
     init_request_id: MsgId,
@@ -110,21 +83,6 @@ fn acknowledge_init_node(
     .expect("Failed to serialise InitOk response");
     println!("{}", response);
     Ok(())
-}
-
-fn initialize_node() -> Result<Node> {
-    let (init_request_id, init_request_src, node_id, node_ids) = parse_init_node()?;
-
-    let mut node = Node {
-        node_id: node_id.clone(),
-        node_ids,
-        next_message_id: 0,
-        stdout: Arc::new(Mutex::new(io::stdout())),
-        stderr: Arc::new(Mutex::new(io::stderr())),
-    };
-    let _ = acknowledge_init_node(&mut node, init_request_id, init_request_src);
-    let _ = node.log(&format!("Initialized Node: {:?}", &node));
-    Ok(node)
 }
 
 fn main() -> Result<()> {
