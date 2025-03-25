@@ -204,11 +204,28 @@ fn main() -> Result<()> {
                         message: broadcast_message,
                     } => {
                         let _ = node.add_message(broadcast_message);
+
+                        // Acknowledge Broadcast
                         let response_body = MessageBody::BroadcastOk {
                             msg_id: node.get_next_msg_id(),
                             in_reply_to: msg_id,
                         };
                         let _ = node.send(&message.src, response_body);
+
+                        // Gossip message to neighbors
+                        if let Some(topology) = &mut node.topology {
+                            let neighbors = match topology.get(&node.node_id) {
+                                Some(neighbors) => neighbors.clone(),
+                                None => Vec::new(),
+                            };
+                            for tgt_node_id in neighbors {
+                                let response_body = MessageBody::Broadcast {
+                                    msg_id: node.get_next_msg_id(),
+                                    message: broadcast_message.clone(),
+                                };
+                                let _ = node.send(&tgt_node_id, response_body);
+                            }
+                        }
                     }
                     MessageBody::Read { msg_id } => {
                         let Ok(messages) = node.read_messages() else {
