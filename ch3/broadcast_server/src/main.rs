@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::error::Error as StdError;
 use std::io;
 use std::io::Write;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 type NodeId = String;
@@ -17,15 +18,14 @@ struct Node {
     node_ids: Vec<NodeId>,
     topology: Option<HashMap<NodeId, Vec<NodeId>>>,
     messages: Arc<Mutex<HashSet<NodeMessage>>>,
-    next_message_id: MsgId,
+    next_message_id: AtomicU64,
     stdout: Arc<Mutex<std::io::Stdout>>,
     stderr: Arc<Mutex<std::io::Stderr>>,
 }
 
 impl Node {
-    fn get_next_msg_id(&mut self) -> MsgId {
-        self.next_message_id += 1;
-        self.next_message_id
+    fn get_next_msg_id(&self) -> MsgId {
+        self.next_message_id.fetch_add(1 as u64, Ordering::SeqCst)
     }
 
     fn add_message(&mut self, message: NodeMessage) -> std::result::Result<(), Box<dyn StdError>> {
@@ -267,7 +267,7 @@ fn main() -> std::result::Result<(), Box<dyn StdError>> {
                 node_ids: node_ids.clone(),
                 messages: Arc::new(Mutex::new(HashSet::new())),
                 topology: None,
-                next_message_id: 0,
+                next_message_id: AtomicU64::new(0),
                 stdout: Arc::new(Mutex::new(io::stdout())),
                 stderr: Arc::new(Mutex::new(io::stderr())),
             };
