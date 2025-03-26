@@ -24,6 +24,17 @@ struct Node {
 }
 
 impl Node {
+    fn new(node_id: &NodeId) -> Arc<Self> {
+        Arc::new(Node {
+            node_id: node_id.to_string(),
+            messages: Arc::new(Mutex::new(HashSet::new())),
+            topology: Arc::new(Mutex::new(None)),
+            next_message_id: AtomicU64::new(0),
+            stdout: Arc::new(Mutex::new(io::stdout())),
+            stderr: Arc::new(Mutex::new(io::stderr())),
+            stdin: Arc::new(Mutex::new(io::stdin())),
+        })
+    }
     fn get_next_msg_id(&self) -> MsgId {
         self.next_message_id.fetch_add(1 as u64, Ordering::SeqCst)
     }
@@ -268,17 +279,8 @@ fn main() -> std::result::Result<(), Box<dyn StdError>> {
             node_ids: _,
         } = &message.body
         {
-            let node = Arc::new(Node {
-                node_id: node_id.to_string(),
-                messages: Arc::new(Mutex::new(HashSet::new())),
-                topology: Arc::new(Mutex::new(None)),
-                next_message_id: AtomicU64::new(0),
-                stdout: Arc::new(Mutex::new(io::stdout())),
-                stderr: Arc::new(Mutex::new(io::stderr())),
-                stdin: Arc::new(Mutex::new(io::stdin())),
-            });
+            let node = Node::new(node_id);
             let _ = node.log(&format!("Initialized Node: {:?}", &node));
-
             let response_body = MessageBody::InitOk {
                 in_reply_to: *msg_id,
             };
