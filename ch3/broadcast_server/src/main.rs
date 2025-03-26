@@ -1,12 +1,13 @@
+use crossbeam::channel::unbounded;
 use serde::de::Error as SerdeError;
 use serde::{Deserialize, Serialize};
 use serde_json::Result;
 use std::collections::{HashMap, HashSet};
 use std::error::Error as StdError;
-use std::io;
 use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::{io, thread};
 
 type NodeId = String;
 type MsgId = u64;
@@ -290,36 +291,65 @@ fn main() -> std::result::Result<(), Box<dyn StdError>> {
             return Err(format!("First message received must be init",).into());
         }
     };
-    loop {
+    let (tx, rx) = unbounded::<Message>();
+    let node_reader = Arc::clone(&node);
+
+    let reader_handle = thread::spawn(move || loop {
         let message = {
-            let stdin = node
-                .stdin
-                .lock()
-                .map_err(|e| format!("Failed to lock stdin: {}", e))?;
-            message_from_stdin(&stdin)?
+            let stdin = node_reader.stdin.lock().expect("Failed to lock stdin");
+            match message_from_stdin(&stdin) {
+                Ok(msg) => msg,
+                Err(e) => {
+                    let _ = node_reader.log(&format!("Error reading message: {}", e));
+                    continue;
+                }
+            }
         };
-        match message.body {
-            MessageBody::Echo { msg_id: _, echo: _ } => {
-                let _ = node.handle_echo(&message);
-            }
-            MessageBody::Topology {
-                msg_id: _,
-                topology: _,
-            } => {
-                let _ = node.handle_topology(&message);
-            }
-            MessageBody::Broadcast {
-                msg_id: _,
-                message: _,
-            } => {
-                let _ = node.handle_broadcast(&message);
-            }
-            MessageBody::Read { msg_id: _ } => {
-                let _ = node.handle_read(&message);
-            }
-            _ => {
-                let _ = node.log("Received message with no known handler");
-            }
+        if tx.send(message).is_err() {
+            break;
         }
+    });
+
+    let num_workers = 4;
+    let mut worker_handles = Vec::with_capacity(num_workers);
+
+    for worker_id in 0..num_workers {
+        let worker_rx = rx.clone();
+        let worker_node = Arc::clone(&node);
+
+        let handle = thread::spawn(move || {
+            let _ = worker_node.log(&format!("Started worker: {}", worker_id));
+            for message in worker_rx {
+                match message.body {
+                    MessageBody::Echo { msg_id: _, echo: _ } => {
+                        let _ = worker_node.handle_echo(&message);
+                    }
+                    MessageBody::Topology {
+                        msg_id: _,
+                        topology: _,
+                    } => {
+                        let _ = worker_node.handle_topology(&message);
+                    }
+                    MessageBody::Broadcast {
+                        msg_id: _,
+                        message: _,
+                    } => {
+                        let _ = worker_node.handle_broadcast(&message);
+                    }
+                    MessageBody::Read { msg_id: _ } => {
+                        let _ = worker_node.handle_read(&message);
+                    }
+                    _ => {
+                        let _ = worker_node.log("Received message with no known handler");
+                    }
+                }
+            }
+        });
+        worker_handles.push(handle);
     }
+    for handle in worker_handles {
+        let _ = handle.join();
+    }
+    let _ = reader_handle.join();
+    Ok(())
 }
