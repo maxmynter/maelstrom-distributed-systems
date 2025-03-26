@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Result;
 use std::collections::{HashMap, HashSet};
 use std::error::Error as StdError;
-use std::fmt::format;
 use std::io;
 use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -16,7 +15,6 @@ type NodeMessage = i64;
 #[derive(Debug)]
 struct Node {
     node_id: NodeId,
-    node_ids: Vec<NodeId>,
     topology: Arc<Mutex<Option<HashMap<NodeId, Vec<NodeId>>>>>,
     messages: Arc<Mutex<HashSet<NodeMessage>>>,
     next_message_id: AtomicU64,
@@ -267,12 +265,11 @@ fn main() -> std::result::Result<(), Box<dyn StdError>> {
         if let MessageBody::Init {
             msg_id,
             node_id,
-            node_ids,
+            node_ids: _,
         } = &message.body
         {
             let node = Arc::new(Node {
                 node_id: node_id.to_string(),
-                node_ids: node_ids.clone(),
                 messages: Arc::new(Mutex::new(HashSet::new())),
                 topology: Arc::new(Mutex::new(None)),
                 next_message_id: AtomicU64::new(0),
