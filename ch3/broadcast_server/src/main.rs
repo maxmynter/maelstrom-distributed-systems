@@ -49,7 +49,7 @@ impl Node {
         Ok(())
     }
 
-    fn read_messages(&mut self) -> std::result::Result<Vec<NodeMessage>, Box<dyn StdError>> {
+    fn read_messages(&self) -> std::result::Result<Vec<NodeMessage>, Box<dyn StdError>> {
         let messages = self
             .messages
             .lock()
@@ -59,7 +59,7 @@ impl Node {
     }
 
     fn messages_contain(
-        &mut self,
+        &self,
         message: &NodeMessage,
     ) -> std::result::Result<bool, Box<dyn StdError>> {
         let messages = self
@@ -69,7 +69,7 @@ impl Node {
         Ok(messages.contains(&message))
     }
 
-    fn log(&mut self, text: &str) -> std::result::Result<(), Box<dyn StdError>> {
+    fn log(&self, text: &str) -> std::result::Result<(), Box<dyn StdError>> {
         match self.stderr.lock() {
             Ok(mut err_out_guard) => {
                 let _ = writeln!(err_out_guard, "{}", text)?;
@@ -79,7 +79,7 @@ impl Node {
         }
     }
 
-    fn send(&mut self, dest: &NodeId, body: MessageBody) -> Result<()> {
+    fn send(&self, dest: &NodeId, body: MessageBody) -> Result<()> {
         let message = Message {
             src: self.node_id.clone(),
             dest: dest.to_string(),
@@ -101,7 +101,7 @@ impl Node {
         Ok(())
     }
 
-    fn handle_echo(&mut self, message: &Message) -> std::result::Result<(), Box<dyn StdError>> {
+    fn handle_echo(&self, message: &Message) -> std::result::Result<(), Box<dyn StdError>> {
         match &message.body {
             MessageBody::Echo { msg_id, echo } => {
                 let response_body = MessageBody::EchoOk {
@@ -180,7 +180,7 @@ impl Node {
             _ => Err("handle_broadcast called on different message".into()),
         }
     }
-    fn handle_read(&mut self, message: &Message) -> std::result::Result<(), Box<dyn StdError>> {
+    fn handle_read(&self, message: &Message) -> std::result::Result<(), Box<dyn StdError>> {
         match &message.body {
             MessageBody::Read { msg_id } => {
                 let Ok(messages) = self.read_messages() else {
@@ -262,7 +262,7 @@ fn main() -> std::result::Result<(), Box<dyn StdError>> {
             node_ids,
         } = &message.body
         {
-            let mut node = Node {
+            let node = Node {
                 node_id: node_id.to_string(),
                 node_ids: node_ids.clone(),
                 messages: Arc::new(Mutex::new(HashSet::new())),
