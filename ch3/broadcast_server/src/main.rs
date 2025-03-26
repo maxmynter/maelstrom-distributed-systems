@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Result;
 use std::collections::{HashMap, HashSet};
 use std::error::Error as StdError;
+use std::fmt::format;
 use std::io;
 use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -16,11 +17,12 @@ type NodeMessage = i64;
 struct Node {
     node_id: NodeId,
     node_ids: Vec<NodeId>,
-    topology: Option<HashMap<NodeId, Vec<NodeId>>>,
+    topology: Arc<Mutex<Option<HashMap<NodeId, Vec<NodeId>>>>>,
     messages: Arc<Mutex<HashSet<NodeMessage>>>,
     next_message_id: AtomicU64,
     stdout: Arc<Mutex<std::io::Stdout>>,
     stderr: Arc<Mutex<std::io::Stderr>>,
+    stdin: Arc<Mutex<std::io::Stdin>>,
 }
 
 impl Node {
@@ -28,7 +30,7 @@ impl Node {
         self.next_message_id.fetch_add(1 as u64, Ordering::SeqCst)
     }
 
-    fn add_message(&mut self, message: NodeMessage) -> std::result::Result<(), Box<dyn StdError>> {
+    fn add_message(&self, message: NodeMessage) -> std::result::Result<(), Box<dyn StdError>> {
         let was_inserted = {
             let mut messages = self
                 .messages
@@ -115,10 +117,14 @@ impl Node {
         }
     }
 
-    fn handle_topology(&mut self, message: &Message) -> std::result::Result<(), Box<dyn StdError>> {
+    fn handle_topology(&self, message: &Message) -> std::result::Result<(), Box<dyn StdError>> {
         match &message.body {
             MessageBody::Topology { msg_id, topology } => {
-                self.topology = Some(topology.clone());
+                let mut topo_guard = self
+                    .topology
+                    .lock()
+                    .map_err(|e| format!("Failed to lock topology: {}", e))?;
+                *topo_guard = Some(topology.clone());
                 let response_body = MessageBody::TopologyOk {
                     in_reply_to: *msg_id,
                 };
@@ -129,10 +135,7 @@ impl Node {
         }
     }
 
-    fn handle_broadcast(
-        &mut self,
-        message: &Message,
-    ) -> std::result::Result<(), Box<dyn StdError>> {
+    fn handle_broadcast(&self, message: &Message) -> std::result::Result<(), Box<dyn StdError>> {
         match message.body {
             MessageBody::Broadcast {
                 msg_id,
@@ -144,7 +147,11 @@ impl Node {
                         let _ = self.add_message(broadcast_message);
 
                         // Gossip message to neighbors
-                        if let Some(topology) = &mut self.topology {
+                        if let Some(topology) = &*self
+                            .topology
+                            .lock()
+                            .map_err(|e| format!("Failed to lock topology in broadcast: {}", e))?
+                        {
                             let neighbors = match topology.get(&self.node_id) {
                                 Some(neighbors) => neighbors.clone(),
                                 None => Vec::new(),
@@ -244,68 +251,75 @@ struct Message {
     body: MessageBody,
 }
 
+fn message_from_stdin(stdin: &io::Stdin) -> Result<Message> {
+    let mut buffer = String::new();
+    let _ = stdin
+        .read_line(&mut buffer)
+        .expect("Failed to read message.");
+    let message: Message = serde_json::from_str(buffer.as_str())?;
+    Ok(message)
+}
+
 fn main() -> std::result::Result<(), Box<dyn StdError>> {
-    // Read the node config
-    let mut node_wrapper: Option<Node> = None;
-
-    loop {
-        let mut buffer = String::new();
+    let node = {
         let stdin = io::stdin();
-        let _ = stdin
-            .read_line(&mut buffer)
-            .expect("Failed to read message.");
-        let message: Message = serde_json::from_str(buffer.as_str())?;
-
+        let message = message_from_stdin(&stdin)?;
         if let MessageBody::Init {
             msg_id,
             node_id,
             node_ids,
         } = &message.body
         {
-            let node = Node {
+            let node = Arc::new(Node {
                 node_id: node_id.to_string(),
                 node_ids: node_ids.clone(),
                 messages: Arc::new(Mutex::new(HashSet::new())),
-                topology: None,
+                topology: Arc::new(Mutex::new(None)),
                 next_message_id: AtomicU64::new(0),
                 stdout: Arc::new(Mutex::new(io::stdout())),
                 stderr: Arc::new(Mutex::new(io::stderr())),
-            };
+                stdin: Arc::new(Mutex::new(io::stdin())),
+            });
             let _ = node.log(&format!("Initialized Node: {:?}", &node));
 
             let response_body = MessageBody::InitOk {
                 in_reply_to: *msg_id,
             };
             let _ = node.send(&message.src, response_body);
-            node_wrapper = Some(node);
-            continue;
+            node
+        } else {
+            return Err(format!("First message received must be init",).into());
+        }
+    };
+    loop {
+        let message = {
+            let stdin = node
+                .stdin
+                .lock()
+                .map_err(|e| format!("Failed to lock stdin: {}", e))?;
+            message_from_stdin(&stdin)?
         };
-        match &mut node_wrapper {
-            Some(node) => match message.body {
-                MessageBody::Echo { msg_id: _, echo: _ } => {
-                    let _ = node.handle_echo(&message);
-                }
-                MessageBody::Topology {
-                    msg_id: _,
-                    topology: _,
-                } => {
-                    let _ = node.handle_topology(&message);
-                }
-                MessageBody::Broadcast {
-                    msg_id: _,
-                    message: _,
-                } => {
-                    let _ = node.handle_broadcast(&message);
-                }
-                MessageBody::Read { msg_id: _ } => {
-                    let _ = node.handle_read(&message);
-                }
-                _ => {
-                    let _ = node.log("Received message with no known handler");
-                }
-            },
-            None => {
-                return Err(format!("Received non-init message before node initialization",).into())
+        match message.body {
+            MessageBody::Echo { msg_id: _, echo: _ } => {
+                let _ = node.handle_echo(&message);
+            }
+            MessageBody::Topology {
+                msg_id: _,
+                topology: _,
+            } => {
+                let _ = node.handle_topology(&message);
+            }
+            MessageBody::Broadcast {
+                msg_id: _,
+                message: _,
+            } => {
+                let _ = node.handle_broadcast(&message);
+            }
+            MessageBody::Read { msg_id: _ } => {
+                let _ = node.handle_read(&message);
+            }
+            _ => {
+                let _ = node.log("Received message with no known handler");
             }
         }
     }
