@@ -12,12 +12,17 @@ use std::{io, thread};
 type NodeId = String;
 type MsgId = u64;
 type NodeMessage = i64;
-type HandlerFn = fn(&Node, &Message) -> std::result::Result<(), Box<dyn StdError>>;
+type HandlerFn = Box<
+    dyn Fn(&Arc<Node>, &Message) -> std::result::Result<(), Box<dyn StdError>> + Send + 'static,
+>;
 
 #[derive(Debug)]
 struct Handler {}
 impl Handler {
-    fn handle_echo(node: &Node, message: &Message) -> std::result::Result<(), Box<dyn StdError>> {
+    fn handle_echo(
+        node: &Arc<Node>,
+        message: &Message,
+    ) -> std::result::Result<(), Box<dyn StdError>> {
         match &message.body {
             MessageBody::Echo { msg_id, echo } => {
                 let response_body = MessageBody::EchoOk {
@@ -32,7 +37,7 @@ impl Handler {
     }
 
     fn handle_topology(
-        node: &Node,
+        node: &Arc<Node>,
         message: &Message,
     ) -> std::result::Result<(), Box<dyn StdError>> {
         match &message.body {
@@ -53,7 +58,7 @@ impl Handler {
     }
 
     fn handle_broadcast(
-        node: &Node,
+        node: &Arc<Node>,
         message: &Message,
     ) -> std::result::Result<(), Box<dyn StdError>> {
         match message.body {
@@ -61,33 +66,81 @@ impl Handler {
                 msg_id,
                 message: broadcast_message,
             } => {
+                // Acknowledge Broadcast
+                let response_body = MessageBody::BroadcastOk {
+                    in_reply_to: msg_id,
+                };
+                let _ = node.send(&message.src, response_body);
+
                 match node.messages_contain(&broadcast_message) {
-                    Ok(true) => {}
+                    Ok(true) => return Ok(()),
                     Ok(false) => {
                         let _ = node.add_message(broadcast_message);
-
-                        // Gossip message to neighbors
-                        if let Some(topology) = &*node
-                            .topology
-                            .lock()
-                            .map_err(|e| format!("Failed to lock topology in broadcast: {}", e))?
-                        {
-                            let neighbors = match topology.get(&node.node_id) {
-                                Some(neighbors) => neighbors.clone(),
-                                None => Vec::new(),
-                            };
-                            for tgt_node_id in neighbors {
-                                if tgt_node_id == message.src {
-                                    // Skip the origin of the broadcast
-                                    continue;
+                        let neighbors = {
+                            if let Some(topology) = &*node.topology.lock().map_err(|e| {
+                                format!("Failed to lock topology in broadcast: {}", e)
+                            })? {
+                                match topology.get(&node.node_id) {
+                                    Some(neighbors) => neighbors.clone(),
+                                    None => Vec::new(),
                                 }
-                                let response_body = MessageBody::Broadcast {
-                                    msg_id: node.get_next_msg_id(),
-                                    message: broadcast_message.clone(),
-                                };
-                                let _ = node.send(&tgt_node_id, response_body);
+                            } else {
+                                // No topology yet
+                                return Ok(());
                             }
+                        };
+
+                        let neighbors: Vec<NodeId> = neighbors
+                            .into_iter()
+                            .filter(|n| n != &message.src)
+                            .collect();
+                        if neighbors.is_empty() {
+                            return Ok(());
                         }
+
+                        let unacked = Arc::new(Mutex::new(
+                            neighbors.iter().cloned().collect::<HashSet<_>>(),
+                        ));
+
+                        let node_clone = Arc::clone(node);
+                        let message_clone = broadcast_message.clone();
+                        let unacked_clone = Arc::clone(&unacked);
+                        thread::spawn(move || {
+                            while !unacked_clone.lock().unwrap().is_empty() {
+                                let currently_unacked = {
+                                    let guard = unacked_clone.lock().unwrap();
+                                    guard.iter().cloned().collect::<Vec<_>>()
+                                };
+                                for dest in currently_unacked {
+                                    let dest_clone = dest.clone();
+                                    let unacked_ref = Arc::clone(&unacked_clone);
+                                    let broadcast_body = MessageBody::Broadcast {
+                                        msg_id: node_clone.get_next_msg_id(),
+                                        message: message_clone,
+                                    };
+                                    if let Err(e) = node_clone.rpc(
+                                        &dest,
+                                        broadcast_body,
+                                        Box::new(move |_node, response| match &response.body {
+                                            MessageBody::BroadcastOk { .. } => {
+                                                let mut guard = unacked_ref.lock().unwrap();
+                                                guard.remove(&dest_clone);
+                                                Ok(())
+                                            }
+                                            _ => Ok(()),
+                                        }),
+                                    ) {
+                                        let _ = node_clone.log(&format!(
+                                            "Failed to send broadcast to {}: {}",
+                                            dest, e
+                                        ));
+                                    }
+                                }
+                                thread::sleep(std::time::Duration::from_secs(1));
+                            }
+                            let _ =
+                                node_clone.log(&format!("Acknowledged message: {}", message_clone));
+                        });
                     }
                     Err(e) => {
                         return Err(format!(
@@ -97,17 +150,15 @@ impl Handler {
                         .into());
                     }
                 }
-                // Acknowledge Broadcast
-                let response_body = MessageBody::BroadcastOk {
-                    in_reply_to: msg_id,
-                };
-                let _ = node.send(&message.src, response_body);
                 Ok(())
             }
             _ => Err("handle_broadcast called on different message".into()),
         }
     }
-    fn handle_read(node: &Node, message: &Message) -> std::result::Result<(), Box<dyn StdError>> {
+    fn handle_read(
+        node: &Arc<Node>,
+        message: &Message,
+    ) -> std::result::Result<(), Box<dyn StdError>> {
         match &message.body {
             MessageBody::Read { msg_id } => {
                 let Ok(messages) = node.read_messages() else {
@@ -129,7 +180,6 @@ impl Handler {
     }
 }
 
-#[derive(Debug)]
 struct Node {
     node_id: NodeId,
     topology: Arc<Mutex<Option<HashMap<NodeId, Vec<NodeId>>>>>,
@@ -154,6 +204,7 @@ impl Node {
             stdin: Arc::new(Mutex::new(io::stdin())),
         })
     }
+
     fn get_next_msg_id(&self) -> MsgId {
         self.next_message_id.fetch_add(1 as u64, Ordering::SeqCst)
     }
@@ -331,7 +382,7 @@ fn main() -> std::result::Result<(), Box<dyn StdError>> {
         } = &message.body
         {
             let node = Node::new(node_id);
-            let _ = node.log(&format!("Initialized Node: {:?}", &node));
+            let _ = node.log(&format!("Initialized Node: {}", &node.node_id));
             let response_body = MessageBody::InitOk {
                 in_reply_to: *msg_id,
             };
