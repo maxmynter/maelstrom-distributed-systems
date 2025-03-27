@@ -12,6 +12,7 @@ use std::{io, thread};
 type NodeId = String;
 type MsgId = u64;
 type NodeMessage = i64;
+type HandlerFn = fn(&Node, &Message) -> std::result::Result<(), Box<dyn StdError>>;
 
 #[derive(Debug)]
 struct Handler {}
@@ -137,6 +138,7 @@ struct Node {
     stdout: Arc<Mutex<std::io::Stdout>>,
     stderr: Arc<Mutex<std::io::Stderr>>,
     stdin: Arc<Mutex<std::io::Stdin>>,
+    callbacks: Arc<Mutex<HashMap<MsgId, HandlerFn>>>,
 }
 
 impl Node {
@@ -144,6 +146,7 @@ impl Node {
         Arc::new(Node {
             node_id: node_id.to_string(),
             messages: Arc::new(Mutex::new(HashSet::new())),
+            callbacks: Arc::new(Mutex::new(HashMap::new())),
             topology: Arc::new(Mutex::new(None)),
             next_message_id: AtomicU64::new(0),
             stdout: Arc::new(Mutex::new(io::stdout())),
@@ -227,6 +230,20 @@ impl Node {
         let _ = self.log(&format!("Sent: {}", jsonified));
         Ok(())
     }
+    fn rpc(
+        &self,
+        dest: &NodeId,
+        body: MessageBody,
+        response_handler: HandlerFn,
+    ) -> std::result::Result<(), Box<dyn StdError>> {
+        let rpc_id = body.msg_id().expect("Body contains no message id");
+        let mut callbacks = self
+            .callbacks
+            .lock()
+            .map_err(|e| format!("Could not acquire lock on callbacks: {}", e))?;
+        let _ = callbacks.insert(rpc_id, response_handler);
+        Ok(self.send(dest, body)?)
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -262,6 +279,29 @@ enum MessageBody {
         in_reply_to: MsgId,
         messages: Vec<NodeMessage>,
     },
+}
+
+impl MessageBody {
+    fn is_reply(&self) -> Option<MsgId> {
+        match self {
+            Self::InitOk { in_reply_to, .. } => Some(*in_reply_to),
+            Self::EchoOk { in_reply_to, .. } => Some(*in_reply_to),
+            Self::TopologyOk { in_reply_to, .. } => Some(*in_reply_to),
+            Self::BroadcastOk { in_reply_to, .. } => Some(*in_reply_to),
+            Self::ReadOk { in_reply_to, .. } => Some(*in_reply_to),
+            _ => None,
+        }
+    }
+    fn msg_id(&self) -> Option<MsgId> {
+        match self {
+            Self::Read { msg_id } => Some(*msg_id),
+            Self::Echo { msg_id, .. } => Some(*msg_id),
+            Self::Topology { msg_id, .. } => Some(*msg_id),
+            Self::Broadcast { msg_id, .. } => Some(*msg_id),
+            Self::Init { msg_id, .. } => Some(*msg_id),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -330,6 +370,20 @@ fn main() -> std::result::Result<(), Box<dyn StdError>> {
         let handle = thread::spawn(move || {
             let _ = worker_node.log(&format!("Started worker: {}", worker_id));
             for message in worker_rx {
+                // If something is a reply, check the callbacks dict...
+                if let Some(reply_to) = message.body.is_reply() {
+                    let callback_opt = {
+                        let mut callbacks = worker_node.callbacks.lock().unwrap();
+                        callbacks.remove(&reply_to)
+                    };
+                    if let Some(callback) = callback_opt {
+                        if let Err(e) = callback(&worker_node, &message) {
+                            let _ = worker_node.log(&format!("Error in callback: {}", e));
+                        }
+                        continue;
+                    }
+                }
+                // ...otherwise handle the message via handlers
                 match message.body {
                     MessageBody::Echo { msg_id: _, echo: _ } => {
                         let _ = Handler::handle_echo(&worker_node, &message);
