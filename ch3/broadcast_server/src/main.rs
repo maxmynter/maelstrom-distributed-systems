@@ -14,6 +14,121 @@ type MsgId = u64;
 type NodeMessage = i64;
 
 #[derive(Debug)]
+struct Handler {}
+impl Handler {
+    fn handle_echo(node: &Node, message: &Message) -> std::result::Result<(), Box<dyn StdError>> {
+        match &message.body {
+            MessageBody::Echo { msg_id, echo } => {
+                let response_body = MessageBody::EchoOk {
+                    echo: echo.to_string(),
+                    in_reply_to: *msg_id,
+                };
+                let _ = node.send(&message.src, response_body);
+                Ok(())
+            }
+            _ => Err("handle_echo called on different message".into()),
+        }
+    }
+
+    fn handle_topology(
+        node: &Node,
+        message: &Message,
+    ) -> std::result::Result<(), Box<dyn StdError>> {
+        match &message.body {
+            MessageBody::Topology { msg_id, topology } => {
+                let mut topo_guard = node
+                    .topology
+                    .lock()
+                    .map_err(|e| format!("Failed to lock topology: {}", e))?;
+                *topo_guard = Some(topology.clone());
+                let response_body = MessageBody::TopologyOk {
+                    in_reply_to: *msg_id,
+                };
+                let _ = node.send(&message.src, response_body);
+                Ok(())
+            }
+            _ => Err("handle_topology called on different message".into()),
+        }
+    }
+
+    fn handle_broadcast(
+        node: &Node,
+        message: &Message,
+    ) -> std::result::Result<(), Box<dyn StdError>> {
+        match message.body {
+            MessageBody::Broadcast {
+                msg_id,
+                message: broadcast_message,
+            } => {
+                match node.messages_contain(&broadcast_message) {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        let _ = node.add_message(broadcast_message);
+
+                        // Gossip message to neighbors
+                        if let Some(topology) = &*node
+                            .topology
+                            .lock()
+                            .map_err(|e| format!("Failed to lock topology in broadcast: {}", e))?
+                        {
+                            let neighbors = match topology.get(&node.node_id) {
+                                Some(neighbors) => neighbors.clone(),
+                                None => Vec::new(),
+                            };
+                            for tgt_node_id in neighbors {
+                                if tgt_node_id == message.src {
+                                    // Skip the origin of the broadcast
+                                    continue;
+                                }
+                                let response_body = MessageBody::Broadcast {
+                                    msg_id: node.get_next_msg_id(),
+                                    message: broadcast_message.clone(),
+                                };
+                                let _ = node.send(&tgt_node_id, response_body);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        return Err(format!(
+                            "Error checking if node message contains broadcast message: {}",
+                            e
+                        )
+                        .into());
+                    }
+                }
+                // Acknowledge Broadcast
+                let response_body = MessageBody::BroadcastOk {
+                    in_reply_to: msg_id,
+                };
+                let _ = node.send(&message.src, response_body);
+                Ok(())
+            }
+            _ => Err("handle_broadcast called on different message".into()),
+        }
+    }
+    fn handle_read(node: &Node, message: &Message) -> std::result::Result<(), Box<dyn StdError>> {
+        match &message.body {
+            MessageBody::Read { msg_id } => {
+                let Ok(messages) = node.read_messages() else {
+                    return Err(serde_json::Error::custom(&format!(
+                        "Failed to read messages on node {}",
+                        node.node_id
+                    ))
+                    .into());
+                };
+                let response_body = MessageBody::ReadOk {
+                    in_reply_to: *msg_id,
+                    messages,
+                };
+                let _ = node.send(&message.src, response_body);
+                Ok(())
+            }
+            _ => Err("handle_read called on different message".into()),
+        }
+    }
+}
+
+#[derive(Debug)]
 struct Node {
     node_id: NodeId,
     topology: Arc<Mutex<Option<HashMap<NodeId, Vec<NodeId>>>>>,
@@ -111,111 +226,6 @@ impl Node {
         };
         let _ = self.log(&format!("Sent: {}", jsonified));
         Ok(())
-    }
-
-    fn handle_echo(&self, message: &Message) -> std::result::Result<(), Box<dyn StdError>> {
-        match &message.body {
-            MessageBody::Echo { msg_id, echo } => {
-                let response_body = MessageBody::EchoOk {
-                    echo: echo.to_string(),
-                    in_reply_to: *msg_id,
-                };
-                let _ = self.send(&message.src, response_body);
-                Ok(())
-            }
-            _ => Err("handle_echo called on different message".into()),
-        }
-    }
-
-    fn handle_topology(&self, message: &Message) -> std::result::Result<(), Box<dyn StdError>> {
-        match &message.body {
-            MessageBody::Topology { msg_id, topology } => {
-                let mut topo_guard = self
-                    .topology
-                    .lock()
-                    .map_err(|e| format!("Failed to lock topology: {}", e))?;
-                *topo_guard = Some(topology.clone());
-                let response_body = MessageBody::TopologyOk {
-                    in_reply_to: *msg_id,
-                };
-                let _ = self.send(&message.src, response_body);
-                Ok(())
-            }
-            _ => Err("handle_topology called on different message".into()),
-        }
-    }
-
-    fn handle_broadcast(&self, message: &Message) -> std::result::Result<(), Box<dyn StdError>> {
-        match message.body {
-            MessageBody::Broadcast {
-                msg_id,
-                message: broadcast_message,
-            } => {
-                match self.messages_contain(&broadcast_message) {
-                    Ok(true) => {}
-                    Ok(false) => {
-                        let _ = self.add_message(broadcast_message);
-
-                        // Gossip message to neighbors
-                        if let Some(topology) = &*self
-                            .topology
-                            .lock()
-                            .map_err(|e| format!("Failed to lock topology in broadcast: {}", e))?
-                        {
-                            let neighbors = match topology.get(&self.node_id) {
-                                Some(neighbors) => neighbors.clone(),
-                                None => Vec::new(),
-                            };
-                            for tgt_node_id in neighbors {
-                                if tgt_node_id == message.src {
-                                    // Skip the origin of the broadcast
-                                    continue;
-                                }
-                                let response_body = MessageBody::Broadcast {
-                                    msg_id: self.get_next_msg_id(),
-                                    message: broadcast_message.clone(),
-                                };
-                                let _ = self.send(&tgt_node_id, response_body);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        return Err(format!(
-                            "Error checking if node message contains broadcast message: {}",
-                            e
-                        )
-                        .into());
-                    }
-                }
-                // Acknowledge Broadcast
-                let response_body = MessageBody::BroadcastOk {
-                    in_reply_to: msg_id,
-                };
-                let _ = self.send(&message.src, response_body);
-                Ok(())
-            }
-            _ => Err("handle_broadcast called on different message".into()),
-        }
-    }
-    fn handle_read(&self, message: &Message) -> std::result::Result<(), Box<dyn StdError>> {
-        match &message.body {
-            MessageBody::Read { msg_id } => {
-                let Ok(messages) = self.read_messages() else {
-                    return Err(serde_json::Error::custom(&format!(
-                        "Failed to read messages on node {}",
-                        self.node_id
-                    ))
-                    .into());
-                };
-                let response_body = MessageBody::ReadOk {
-                    in_reply_to: *msg_id,
-                    messages,
-                };
-                let _ = self.send(&message.src, response_body);
-                Ok(())
-            }
-            _ => Err("handle_read called on different message".into()),
-        }
     }
 }
 
@@ -322,22 +332,22 @@ fn main() -> std::result::Result<(), Box<dyn StdError>> {
             for message in worker_rx {
                 match message.body {
                     MessageBody::Echo { msg_id: _, echo: _ } => {
-                        let _ = worker_node.handle_echo(&message);
+                        let _ = Handler::handle_echo(&worker_node, &message);
                     }
                     MessageBody::Topology {
                         msg_id: _,
                         topology: _,
                     } => {
-                        let _ = worker_node.handle_topology(&message);
+                        let _ = Handler::handle_topology(&worker_node, &message);
                     }
                     MessageBody::Broadcast {
                         msg_id: _,
                         message: _,
                     } => {
-                        let _ = worker_node.handle_broadcast(&message);
+                        let _ = Handler::handle_broadcast(&worker_node, &message);
                     }
                     MessageBody::Read { msg_id: _ } => {
-                        let _ = worker_node.handle_read(&message);
+                        let _ = Handler::handle_read(&worker_node, &message);
                     }
                     _ => {
                         let _ = worker_node.log("Received message with no known handler");
