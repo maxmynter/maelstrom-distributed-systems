@@ -7,6 +7,7 @@ use std::error::Error as StdError;
 use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use std::{io, thread};
 
 type NodeId = String;
@@ -15,6 +16,7 @@ type NodeMessage = i64;
 type HandlerFn = Box<
     dyn Fn(&Arc<Node>, &Message) -> std::result::Result<(), Box<dyn StdError>> + Send + 'static,
 >;
+type PeriodicTask = Box<dyn Fn() -> std::result::Result<(), Box<dyn StdError>> + Send + 'static>;
 
 #[derive(Debug)]
 struct Handler {}
@@ -189,6 +191,7 @@ struct Node {
     stderr: Arc<Mutex<std::io::Stderr>>,
     stdin: Arc<Mutex<std::io::Stdin>>,
     callbacks: Arc<Mutex<HashMap<MsgId, HandlerFn>>>,
+    periodic_tasks: Arc<Mutex<Vec<(Duration, PeriodicTask)>>>,
 }
 
 impl Node {
@@ -202,6 +205,7 @@ impl Node {
             stdout: Arc::new(Mutex::new(io::stdout())),
             stderr: Arc::new(Mutex::new(io::stderr())),
             stdin: Arc::new(Mutex::new(io::stdin())),
+            periodic_tasks: Arc::new(Mutex::new(Vec::new())),
         })
     }
 
@@ -281,6 +285,48 @@ impl Node {
         let _ = self.log(&format!("Sent: {}", jsonified));
         Ok(())
     }
+
+    fn every<F>(self: &Arc<Self>, duration: Duration, f: F)
+    where
+        F: Fn(&Self) -> std::result::Result<(), Box<dyn StdError>> + Send + 'static,
+    {
+        let self_clone = Arc::clone(self);
+        let wrapped_fn = move || f(&self_clone);
+        let mut tasks = self.periodic_tasks.lock().unwrap();
+        tasks.push((duration, Box::new(wrapped_fn)))
+    }
+
+    fn run_event_loop(self: &Arc<Self>) {
+        let node = Arc::clone(self);
+        std::thread::spawn(move || {
+            let mut last_runs: Vec<std::time::Instant> = Vec::new();
+            loop {
+                {
+                    // Update tasks run timestamps
+                    let tasks = node.periodic_tasks.lock().unwrap();
+                    while last_runs.len() < tasks.len() {
+                        last_runs.push(std::time::Instant::now());
+                    }
+                }
+
+                {
+                    // Check time passed and run each task
+                    let tasks = node.periodic_tasks.lock().unwrap();
+                    for (i, (duration, task)) in tasks.iter().enumerate() {
+                        let now = std::time::Instant::now();
+                        if now.duration_since(last_runs[i]) >= *duration {
+                            if let Err(e) = task() {
+                                let _ = &node.log(&format!("Error running periodic task: {}", e));
+                            }
+                            last_runs[i] = now;
+                        }
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        });
+    }
+
     fn rpc(
         &self,
         dest: &NodeId,
@@ -392,6 +438,10 @@ fn main() -> std::result::Result<(), Box<dyn StdError>> {
             return Err(format!("First message received must be init",).into());
         }
     };
+
+    // Start executing periodic tasks
+    node.run_event_loop();
+
     let (tx, rx) = unbounded::<Message>();
     let node_reader = Arc::clone(&node);
 
