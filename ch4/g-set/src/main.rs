@@ -180,6 +180,27 @@ impl Handler {
             _ => Err("handle_read called on different message".into()),
         }
     }
+
+    fn handle_add(
+        node: &Arc<Node>,
+        message: &Message,
+    ) -> std::result::Result<(), Box<dyn StdError>> {
+        match &message.body {
+            MessageBody::Add { msg_id, element } => {
+                if let Ok(()) = node.add_message(*element) {
+                    let response_body = MessageBody::AddOk {
+                        in_reply_to: *msg_id,
+                    };
+                    let _ = node.send(&message.src, response_body);
+                    Ok(())
+                } else {
+                    return Err(format!("Failed to insert message to set").into());
+                }
+            }
+
+            _ => Err("handle_add called on different message type".into()),
+        }
+    }
 }
 
 struct Node {
@@ -376,6 +397,11 @@ enum MessageBody {
         in_reply_to: MsgId,
         messages: Vec<NodeMessage>,
     },
+    #[serde(rename = "add")]
+    Add { msg_id: MsgId, element: NodeMessage },
+
+    #[serde(rename = "add_ok")]
+    AddOk { in_reply_to: MsgId },
 }
 
 impl MessageBody {
