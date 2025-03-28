@@ -201,6 +201,29 @@ impl Handler {
             _ => Err("handle_add called on different message type".into()),
         }
     }
+
+    fn handle_replicate(
+        node: &Arc<Node>,
+        message: &Message,
+    ) -> std::result::Result<(), Box<dyn StdError>> {
+        match &message.body {
+            MessageBody::Replicate { value } => {
+                let _ = node.log(&format!(
+                    "Replicating message set from node: {}",
+                    node.node_id
+                ));
+                let mut messages = node
+                    .messages
+                    .lock()
+                    .map_err(|e| format!("Failed to acquire lock on messages: {}", e))?;
+                for msg in value {
+                    messages.insert(*msg);
+                }
+                Ok(())
+            }
+            _ => Err("handle_replicate called on different message type".into()),
+        }
+    }
 }
 
 struct Node {
@@ -399,9 +422,10 @@ enum MessageBody {
     },
     #[serde(rename = "add")]
     Add { msg_id: MsgId, element: NodeMessage },
-
     #[serde(rename = "add_ok")]
     AddOk { in_reply_to: MsgId },
+    #[serde(rename = "replicate")]
+    Replicate { value: Vec<NodeMessage> },
 }
 
 impl MessageBody {
