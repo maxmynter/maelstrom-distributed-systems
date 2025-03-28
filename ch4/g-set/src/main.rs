@@ -412,6 +412,7 @@ impl MessageBody {
             Self::TopologyOk { in_reply_to, .. } => Some(*in_reply_to),
             Self::BroadcastOk { in_reply_to, .. } => Some(*in_reply_to),
             Self::ReadOk { in_reply_to, .. } => Some(*in_reply_to),
+            Self::AddOk { in_reply_to, .. } => Some(*in_reply_to),
             _ => None,
         }
     }
@@ -422,6 +423,7 @@ impl MessageBody {
             Self::Topology { msg_id, .. } => Some(*msg_id),
             Self::Broadcast { msg_id, .. } => Some(*msg_id),
             Self::Init { msg_id, .. } => Some(*msg_id),
+            Self::Add { msg_id, .. } => Some(*msg_id),
             _ => None,
         }
     }
@@ -512,23 +514,20 @@ fn main() -> std::result::Result<(), Box<dyn StdError>> {
                 }
                 // ...otherwise handle the message via handlers
                 match message.body {
-                    MessageBody::Echo { msg_id: _, echo: _ } => {
+                    MessageBody::Echo { .. } => {
                         let _ = Handler::handle_echo(&worker_node, &message);
                     }
-                    MessageBody::Topology {
-                        msg_id: _,
-                        topology: _,
-                    } => {
+                    MessageBody::Topology { .. } => {
                         let _ = Handler::handle_topology(&worker_node, &message);
                     }
-                    MessageBody::Broadcast {
-                        msg_id: _,
-                        message: _,
-                    } => {
+                    MessageBody::Broadcast { .. } => {
                         let _ = Handler::handle_broadcast(&worker_node, &message);
                     }
-                    MessageBody::Read { msg_id: _ } => {
+                    MessageBody::Read { .. } => {
                         let _ = Handler::handle_read(&worker_node, &message);
+                    }
+                    MessageBody::Add { .. } => {
+                        let _ = Handler::handle_add(&worker_node, &message);
                     }
                     _ => {
                         let _ = worker_node.log("Received message with no known handler");
