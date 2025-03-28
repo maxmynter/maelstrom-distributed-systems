@@ -172,7 +172,7 @@ impl Handler {
                 };
                 let response_body = MessageBody::ReadOk {
                     in_reply_to: *msg_id,
-                    messages,
+                    value: messages,
                 };
                 let _ = node.send(&message.src, response_body);
                 Ok(())
@@ -395,7 +395,7 @@ enum MessageBody {
     #[serde(rename = "read_ok")]
     ReadOk {
         in_reply_to: MsgId,
-        messages: Vec<NodeMessage>,
+        value: Vec<NodeMessage>,
     },
     #[serde(rename = "add")]
     Add { msg_id: MsgId, element: NodeMessage },
