@@ -53,9 +53,14 @@ impl Handler {
                     in_reply_to: *msg_id,
                 };
                 let _ = node.send(&message.src, response_body);
+                let _ = node.log(&format!("Applied toplogy: {:?}", topology));
                 Ok(())
             }
-            _ => Err("handle_topology called on different message".into()),
+            _ => {
+                let error_msg = format!("handle_topology called on different message");
+                let _ = node.log(&error_msg);
+                Err(error_msg.into())
+            }
         }
     }
 
@@ -206,11 +211,12 @@ impl Handler {
         node: &Arc<Node>,
         message: &Message,
     ) -> std::result::Result<(), Box<dyn StdError>> {
+        let _ = node.log(&format!("Handling replication"));
         match &message.body {
             MessageBody::Replicate { value } => {
                 let _ = node.log(&format!(
-                    "Replicating message set from node: {}",
-                    node.node_id
+                    "Received replication from node {}: {:?}",
+                    message.src, value
                 ));
                 let mut messages = node
                     .messages
@@ -219,6 +225,7 @@ impl Handler {
                 for msg in value {
                     messages.insert(*msg);
                 }
+                let _ = node.log(&format!("Messages after merging:  {:?}", messages));
                 Ok(())
             }
             _ => Err("handle_replicate called on different message type".into()),
@@ -494,6 +501,45 @@ fn main() -> std::result::Result<(), Box<dyn StdError>> {
     // Start executing periodic tasks
     node.run_event_loop();
 
+    node.every(Duration::from_secs(1), |node| match node.read_messages() {
+        Ok(messages) => {
+            let _ = node.log(&format!("Sending current set {:?}", messages));
+            let nodes = match node.topology.lock() {
+                Ok(topo_guard) => {
+                    if let Some(topo) = &*topo_guard {
+                        topo.keys().cloned().collect::<Vec<_>>()
+                    } else {
+                        vec![]
+                    }
+                }
+                Err(e) => {
+                    let _ = node.log(&format!("Failed to lock topology in periodic task: {}", e));
+                    vec![]
+                }
+            };
+            let _ = node.log(&format!("PRE NODES: {:?}", nodes));
+            for dest in nodes {
+                if dest != node.node_id {
+                    let replicate_body = MessageBody::Replicate {
+                        value: messages.clone(),
+                    };
+                    let _ = node.log("SENDING");
+                    if let Err(e) = node.send(&dest, replicate_body) {
+                        let _ = node.log(&format!(
+                            "Could not duplicate messages to node {}: {}",
+                            dest, e
+                        ));
+                    }
+                }
+            }
+            Ok(())
+        }
+        Err(e) => {
+            let _ = node.log(&format!("Error reading messages for replication: {}", e));
+            Err(e)
+        }
+    });
+
     let (tx, rx) = unbounded::<Message>();
     let node_reader = Arc::clone(&node);
 
@@ -552,6 +598,14 @@ fn main() -> std::result::Result<(), Box<dyn StdError>> {
                     }
                     MessageBody::Add { .. } => {
                         let _ = Handler::handle_add(&worker_node, &message);
+                    }
+                    MessageBody::Replicate { .. } => {
+                        let _ = &worker_node.log("Replicate route pre handler");
+                        let _ = Handler::handle_replicate(&worker_node, &message);
+                        let _ = &worker_node.log(&format!(
+                            "Messages: {:?}",
+                            &worker_node.messages.lock().unwrap()
+                        ));
                     }
                     _ => {
                         let _ = worker_node.log("Received message with no known handler");
