@@ -1,5 +1,5 @@
 [package]
-name = "broadcast_server"
+name = "g-set"
 version = "0.1.0"
 edition = "2021"
 
