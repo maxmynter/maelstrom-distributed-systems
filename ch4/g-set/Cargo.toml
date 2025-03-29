@@ -1,9 +1,9 @@
 [package]
-name = "g_set_crdt"
+name = "g-set"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
-crossbeam = "0.8.4"
+anyhow = "1.0.97"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
