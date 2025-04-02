@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::error::Error as StdError;
@@ -27,9 +27,13 @@ enum MessageBody {
     #[serde(rename = "init_ok")]
     InitOk { in_reply_to: MsgId },
     #[serde(rename = "add")]
-    Add,
+    Add { element: u64, msg_id: MsgId },
+    #[serde(rename = "add_ok")]
+    AddOk,
     #[serde(rename = "read")]
     Read,
+    #[serde(rename = "read_ok")]
+    ReadOk,
 }
 
 struct Node {
@@ -63,8 +67,29 @@ impl Node {
         Ok(message)
     }
 
-    fn add_message(&self, message: MessageContent) {
-        todo!()
+    fn send(&self, dest: &NodeId, body: MessageBody) -> Result<()> {
+        let message = Message {
+            src: self.node_id,
+            dest: *dest,
+            body,
+        };
+        let jsonified = serde_json::to_string(&message).expect("Failed to serialize message");
+        let _ = match self.stdout.lock() {
+            Ok(mut stdout_guard) => {
+                writeln!(stdout_guard, "{}", jsonified)
+            }
+            Err(e) => bail!("Failed to capture lock on stdout for sending: {}", e),
+        };
+        Ok(())
+    }
+
+    fn add_message(&self, message: MessageContent) -> Result<()> {
+        let mut messages = self
+            .messages
+            .lock()
+            .map_err(|e| anyhow!("Failed to lock messages: {}", e))?;
+        messages.insert(message);
+        Ok(())
     }
 
     fn log(&self, text: String) {
@@ -96,7 +121,9 @@ fn main() -> Result<()> {
     loop {
         match node.receive() {
             Ok(message) => match message.body {
-                MessageBody::Add => todo!(),
+                MessageBody::Add { msg_id: _, element } => {
+                    let _ = node.add_message(element);
+                }
                 MessageBody::Read => todo!(),
                 _ => {
                     node.log(format!("Unkown message body: {:?}", message));
