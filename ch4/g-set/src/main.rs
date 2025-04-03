@@ -29,11 +29,11 @@ enum MessageBody {
     #[serde(rename = "add")]
     Add { element: u64, msg_id: MsgId },
     #[serde(rename = "add_ok")]
-    AddOk,
+    AddOk { in_reply_to: MsgId },
     #[serde(rename = "read")]
-    Read,
+    Read { msg_id: MsgId },
     #[serde(rename = "read_ok")]
-    ReadOk,
+    ReadOk { in_reply_to: MsgId, value: Vec<u64> },
 }
 
 struct Node {
@@ -89,7 +89,16 @@ impl Node {
             .lock()
             .map_err(|e| anyhow!("Failed to lock messages: {}", e))?;
         messages.insert(message);
+        self.log(format!("Node {}: Added message: {}", self.node_id, message));
         Ok(())
+    }
+
+    fn get_all_messages(&self) -> Result<Vec<MsgId>> {
+        if let Ok(message_lock) = self.messages.lock() {
+            Ok(message_lock.iter().cloned().collect::<Vec<MsgId>>())
+        } else {
+            bail!("Could not acquire lock on messages")
+        }
     }
 
     fn log(&self, text: String) {
@@ -121,10 +130,21 @@ fn main() -> Result<()> {
     loop {
         match node.receive() {
             Ok(message) => match message.body {
-                MessageBody::Add { msg_id: _, element } => {
+                MessageBody::Add { msg_id, element } => {
                     let _ = node.add_message(element);
+                    let response_body = MessageBody::AddOk {
+                        in_reply_to: msg_id,
+                    };
+                    let _ = node.send(&message.src, response_body);
                 }
-                MessageBody::Read => todo!(),
+                MessageBody::Read { msg_id } => {
+                    let all_messages = node.get_all_messages()?;
+                    let response_body = MessageBody::ReadOk {
+                        value: all_messages,
+                        in_reply_to: msg_id,
+                    };
+                    let _ = node.send(&message.src, response_body);
+                }
                 _ => {
                     node.log(format!("Unkown message body: {:?}", message));
                 }
