@@ -3,7 +3,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::error::Error as StdError;
 use std::io::Write;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 type NodeId = u64;
 type MsgId = u64;
@@ -33,7 +35,11 @@ enum MessageBody {
     #[serde(rename = "read")]
     Read { msg_id: MsgId },
     #[serde(rename = "read_ok")]
-    ReadOk { in_reply_to: MsgId, value: Vec<u64> },
+    ReadOk {
+        in_reply_to: MsgId,
+        value: Vec<u64>,
+        msg_id: u64,
+    },
 }
 
 struct Node {
@@ -43,6 +49,7 @@ struct Node {
     stdout: Arc<Mutex<std::io::Stdout>>,
     stderr: Arc<Mutex<std::io::Stderr>>,
     callbacks: Arc<Mutex<HashMap<MsgId, HandlerFn>>>,
+    next_message_id: AtomicU64,
 }
 
 impl Node {
@@ -54,7 +61,12 @@ impl Node {
             stdout: Arc::new(Mutex::new(std::io::stdout())),
             stderr: Arc::new(Mutex::new(std::io::stderr())),
             callbacks: Arc::new(Mutex::new(HashMap::new())),
+            next_message_id: AtomicU64::new(0),
         }
+    }
+
+    fn every(&self, dt: Duration, f: HandlerFn) -> Result<()> {
+        todo!()
     }
 
     fn receive(&self) -> Result<Message> {
@@ -108,6 +120,10 @@ impl Node {
             .expect("Node failed to acquire lock on stderr");
         writeln!(stderr, "Node {}: {}", self.node_id, text).expect("Failed to log");
     }
+
+    fn next_message_id(&self) -> MsgId {
+        self.next_message_id.fetch_add(1 as u64, Ordering::SeqCst)
+    }
 }
 
 fn init_node_from_stdin() -> Result<Node> {
@@ -142,6 +158,7 @@ fn main() -> Result<()> {
                     let response_body = MessageBody::ReadOk {
                         value: all_messages,
                         in_reply_to: msg_id,
+                        msg_id: node.next_message_id(),
                     };
                     let _ = node.send(&message.src, response_body);
                 }
